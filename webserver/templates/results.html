@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网络监控平台 By Elink</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@latest/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@latest/map/js/china.js"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap">
+    <style>
+        /* 全局样式，使用蓝黑色调背景 */
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #020c1b 0%, #0a192f 100%);
+            margin: 0;
+            padding: 20px;
+            color: #ccd6f6;
+            min-height: 100vh;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+            animation: fadeInDown 1s ease;
+        }
+
+        /* 省份和表格容器样式 */
+       .province-container {
+            background-color: rgba(10, 25, 47, 0.8);
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+            padding: 20px;
+            animation: fadeIn 0.5s ease;
+            transition: transform 0.3s ease;
+        }
+
+       .province-container:hover {
+            transform: translateY(-5px);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        h2 {
+            color: #64ffda;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+            font-size: 1.8rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            table-layout: fixed;
+        }
+
+        th,
+        td {
+            padding: 15px;
+            text-align: center;
+            border-bottom: 1px solid #334155;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        th {
+            background-color: rgba(23, 42, 69, 0.8);
+            color: #64ffda;
+            font-weight: 600;
+        }
+
+        tr:nth-child(even) {
+            background-color: rgba(16, 32, 56, 0.8);
+        }
+
+        tr:hover {
+            background-color: rgba(23, 42, 69, 0.8);
+            transition: background-color 0.3s ease;
+        }
+
+        /* 设置每列的宽度 */
+        th:nth-child(1),
+        td:nth-child(1) {
+            width: 20%;
+        }
+
+        th:nth-child(2),
+        td:nth-child(2) {
+            width: 20%;
+        }
+
+        th:nth-child(3),
+        td:nth-child(3) {
+            width: 20%;
+        }
+
+        th:nth-child(4),
+        td:nth-child(4) {
+            width: 20%;
+        }
+
+        th:nth-child(5),
+        td:nth-child(5) {
+            width: 20%;
+        }
+        /* 不同状态的颜色样式 */
+       .green {
+            color: #28a745;
+        }
+
+       .orange {
+            color: #ffc107;
+        }
+
+       .red {
+            color: #dc3545;
+        }
+
+       .strikethrough {
+            text-decoration: line-through;
+        }
+
+        /* 新增样式，用于下载速率为 0 时的地区名字 */
+       .zero-download-rate {
+            color: #dc3545;
+            text-decoration: line-through;
+        }
+
+        /* 新增样式，用于将满足条件的城市名称变为绿色 */
+       .green-city-name {
+            color: #28a745;
+        }
+
+        /* 当前节点信息样式 */
+        #current-node-info {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(10, 25, 47, 0.8);
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            animation: fadeInRight 1s ease;
+        }
+
+        @keyframes fadeInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* 日期筛选表单样式 */
+        #date-filter {
+            text-align: center;
+            margin-bottom: 20px;
+            animation: fadeInUp 1s ease;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        #date-filter input[type="datetime-local"] {
+            margin: 0 5px;
+            padding: 5px;
+            background-color: rgba(16, 32, 56, 0.8);
+            border: 1px solid #334155;
+            border-radius: 3px;
+            color: #ccd6f6;
+        }
+
+        #date-filter input[type="submit"] {
+            padding: 5px 10px;
+            background-color: #64ffda;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            color: #0a192f;
+            transition: background-color 0.3s ease;
+        }
+
+        #date-filter input[type="submit"]:hover {
+            background-color: #73ffdf;
+        }
+    </style>
+</head>
+
+<body>
+    
+    <h1>网络拨测监控平台</h1>
+    <!-- 显示当前节点信息 -->
+    <div id="current-node-info">
+        <p>最新检测的节点: {{.CurrentNode.NodeName}}</p>
+        <p>最后检测时间: {{.CurrentNode.TestTime}}</p>
+    </div>
+
+    <!-- 日期筛选表单 -->
+    <form id="date-filter" action="/" method="get">
+        <label for="start-time">开始时间:</label>
+        <input type="datetime-local" id="start-time" name="start-time">
+        <label for="end-time">结束时间:</label>
+        <input type="datetime-local" id="end-time" name="end-time">
+        <input type="submit" value="筛选">
+    </form>
+    <div id="china-map" style="width: 100%; height: 600px;"></div>
+    {{range .Provinces}}
+    <div class="province-container">
+        <h2>{{.Name}}</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>城市名称</th>
+                    <th>访问成功率</th>
+                    <th>响应时间（ms）</th>
+                    <th>下载速率（Mbps）</th>
+                    <th>最后更新时间</th>
+                </tr>
+            </thead>
+            <tbody id="{{.Name}}-table-body">
+                {{range .Cities}}
+                <tr id="{{.Name}}">
+                    <td {{if eq .DownloadRate 0.0}} class="zero-download-rate" {{else if and (gt .DownloadRate 10.0) (gt .AvgSuccessRate 95.0) (lt .AvgResponseTime 500)}} class="green-city-name" {{end}}>
+                        {{.Name}}
+                    </td>
+                    <td class="{{if gt .AvgSuccessRate 95.0}}green{{else if and (gt .AvgSuccessRate 50.0) (le .AvgSuccessRate 80.0)}}orange{{else if and (gt .AvgSuccessRate 30.0) (le .AvgSuccessRate 50.0)}}red{{else if le .AvgSuccessRate 30.0}}red strikethrough{{end}}">
+                        {{printf "%.2f%%" .AvgSuccessRate}}
+                    </td>
+                    <td class="{{if lt .AvgResponseTime 500}}green{{else if and (ge .AvgResponseTime 500) (lt .AvgResponseTime 1000)}}orange{{else if and (ge .AvgResponseTime 1000) (lt .AvgResponseTime 3000)}}red{{else if ge .AvgResponseTime 3000}}red strikethrough{{end}}">
+                        {{.AvgResponseTime}}
+                    </td>
+                    <td>{{printf "%.2f" .DownloadRate}}</td>
+                    <td>{{.LastUpdateTime}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
+    <script>
+        // 页面加载时初始化地图
+        const mapChart = echarts.init(document.getElementById('china-map'));
+        let previousData = null;
+
+        // 每 5 秒执行一次更新操作
+        setInterval(updateData, 5000);
+
+        function updateData() {
+            const startTime = document.getElementById('start-time').value;
+            const endTime = document.getElementById('end-time').value;
+
+            let url = '/latest-data';
+            if (startTime) {
+                url += '?start-time=' + startTime;
+            }
+            if (endTime) {
+                if (startTime) {
+                    url += '&end-time=' + endTime;
+                } else {
+                    url += '?end-time=' + endTime;
+                }
+            }
+
+            // 发送请求获取最新数据
+            fetch(url)
+              .then(response => response.json())
+              .then(data => {
+                    // 比较数据是否有变化
+                    const isDataChanged = JSON.stringify(data) !== JSON.stringify(previousData);
+                    if (isDataChanged) {
+                        // 更新当前节点信息
+                        const currentNodeInfo = document.getElementById('current-node-info');
+                        currentNodeInfo.innerHTML = `
+                            <p>最新检测的节点: ${data.CurrentNode.NodeName}</p>
+                            <p>最后检测时间: ${data.CurrentNode.TestTime}</p>
+                        `;
+
+                        // 更新每个省份的表格数据
+                        data.Provinces.forEach(province => {
+                            console.log(`Province: ${province.Name}`);
+                            let tableBody = document.getElementById(`${province.Name}-table-body`);
+                            if (!tableBody) {
+                                const provinceDiv = document.createElement('div');
+                                provinceDiv.className = 'province-container';
+                                provinceDiv.innerHTML = `
+                                    <h2>${province.Name}</h2>
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>城市名称</th>
+                                                <th>访问成功率</th>
+                                                <th>响应时间（ms）</th>
+                                                <th>下载速率（Mbps）</th>
+                                                <th>最后更新时间</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="${province.Name}-table-body"></tbody>
+                                    </table>
+                                `;
+                                document.body.appendChild(provinceDiv);
+                                tableBody = provinceDiv.querySelector('tbody');
+                            }
+
+                            const existingCityIds = {};
+                            const rows = tableBody.rows;
+                            for (let i = 0; i < rows.length; i++) {
+                                existingCityIds[rows[i].id] = rows[i];
+                            }
+
+                            province.Cities.forEach(city => {
+                                const row = existingCityIds[city.Name];
+                                if (row) {
+                                    const successRateCell = row.cells[1];
+                                    const responseTimeCell = row.cells[2];
+                                    const downloadRateCell = row.cells[3];
+                                    const lastUpdateTimeCell = row.cells[4];
+
+                                    const newSuccessRate = `${city.AvgSuccessRate.toFixed(2)}%`;
+                                    const newResponseTime = city.AvgResponseTime;
+                                    const newDownloadRate = city.DownloadRate.toFixed(2);
+                                    const newLastUpdateTime = city.LastUpdateTime;
+
+                                    if (successRateCell.textContent!== newSuccessRate) {
+                                        successRateCell.textContent = newSuccessRate;
+                                        if (city.AvgSuccessRate > 95.0) {
+                                            successRateCell.className = 'green';
+                                        } else if (city.AvgSuccessRate > 50.0 && city.AvgSuccessRate <= 80.0) {
+                                            successRateCell.className = 'orange';
+                                        } else if (city.AvgSuccessRate > 30.0 && city.AvgSuccessRate <= 50.0) {
+                                            successRateCell.className = 'red';
+                                        } else {
+                                            successRateCell.className = 'red strikethrough';
+                                        }
+                                    }
+
+                                    if (responseTimeCell.textContent!== newResponseTime.toString()) {
+                                        responseTimeCell.textContent = newResponseTime;
+                                        if (city.AvgResponseTime < 500) {
+                                            responseTimeCell.className = 'green';
+                                        } else if (city.AvgResponseTime >= 500 && city.AvgResponseTime < 1000) {
+                                            responseTimeCell.className = 'orange';
+                                        } else if (city.AvgResponseTime >= 1000 && city.AvgResponseTime < 3000) {
+                                            responseTimeCell.className = 'red';
+                                        } else {
+                                            responseTimeCell.className = 'red strikethrough';
+                                        }
+                                    }
+
+                                    if (downloadRateCell.textContent!== newDownloadRate) {
+                                        downloadRateCell.textContent = newDownloadRate;
+                                    }
+
+                                    if (lastUpdateTimeCell.textContent!== newLastUpdateTime) {
+                                        lastUpdateTimeCell.textContent = newLastUpdateTime;
+                                    }
+                                } else {
+                                    // 新增行
+                                    const newRow = tableBody.insertRow();
+                                    newRow.id = city.Name;
+
+                                    const nameCell = newRow.insertCell(0);
+                                    const successRateCell = newRow.insertCell(1);
+                                    const responseTimeCell = newRow.insertCell(2);
+                                    const downloadRateCell = newRow.insertCell(3);
+                                    const lastUpdateTimeCell = newRow.insertCell(4);
+
+                                    nameCell.textContent = city.Name;
+                                    if (city.DownloadRate === 0.0) {
+                                        nameCell.className = 'zero-download-rate';
+                                    } else if (city.DownloadRate > 10.0 && city.AvgSuccessRate > 95.0 && city.AvgResponseTime < 500) {
+                                        nameCell.className = 'green-city-name';
+                                    }
+
+                                    const newSuccessRate = `${city.AvgSuccessRate.toFixed(2)}%`;
+                                    const newResponseTime = city.AvgResponseTime;
+                                    const newDownloadRate = city.DownloadRate.toFixed(2);
+                                    const newLastUpdateTime = city.LastUpdateTime;
+
+                                    successRateCell.textContent = newSuccessRate;
+                                    if (city.AvgSuccessRate > 95.0) {
+                                        successRateCell.className = 'green';
+                                    } else if (city.AvgSuccessRate > 50.0 && city.AvgSuccessRate <= 80.0) {
+                                        successRateCell.className = 'orange';
+                                    } else if (city.AvgSuccessRate > 30.0 && city.AvgSuccessRate <= 50.0) {
+                                        successRateCell.className = 'red';
+                                    } else {
+                                        successRateCell.className = 'red strikethrough';
+                                    }
+
+                                    responseTimeCell.textContent = newResponseTime;
+                                    if (city.AvgResponseTime < 500) {
+                                        responseTimeCell.className = 'green';
+                                    } else if (city.AvgResponseTime >= 500 && city.AvgResponseTime < 1000) {
+                                        responseTimeCell.className = 'orange';
+                                    } else if (city.AvgResponseTime >= 1000 && city.AvgResponseTime < 3000) {
+                                        responseTimeCell.className = 'red';
+                                    } else {
+                                        responseTimeCell.className = 'red strikethrough';
+                                    }
+
+                                    downloadRateCell.textContent = newDownloadRate;
+                                    lastUpdateTimeCell.textContent = newLastUpdateTime;
+                                }
+                            });
+                        });
+                                                const mapData = data.Provinces.map(province => {
+                            const avgDownloadRate = isNaN(province.AvgDownloadRate) ? 0 : province.AvgDownloadRate;
+                            return {
+                                name: province.Name,
+                                value: avgDownloadRate
+                            };
+                        });
+
+                        const option = {
+                            tooltip: {
+                                trigger: 'item',
+                                formatter: function (params) {
+                                    const province = data.Provinces.find(p => p.Name === params.name);
+                                    let cityInfo = '';
+                                    // 检查 province 是否为 undefined
+                                    if (province) {
+                                        province.Cities.forEach(city => {
+                                            cityInfo += `<br/>${city.Name}: ${city.DownloadRate.toFixed(2)} Mbps`;
+                                        });
+                                    }
+                                    return `${params.name}<br/>平均下载速率: ${params.value.toFixed(2)} Mbps${cityInfo}`;
+                                }
+                            },
+                            visualMap: {
+                                min: 0,
+                                // 确保最大下载速率不为 NaN，如果为 NaN 则设为 0
+                                max: Math.max(0, ...data.Provinces.map(p => isNaN(p.AvgDownloadRate) ? 0 : p.AvgDownloadRate)),
+                                left: 'left',
+                                top: 'bottom',
+                                text: ['高', '低'],
+                                calculable: true,
+                                inRange: {
+                                    color: ['#FF0000', '#00FF00'] // 从红色到绿色
+                                }
+                            },
+                            series: [
+                                {
+                                    name: '平均下载速率',
+                                    type: 'map',
+                                    map: 'china',
+                                    data: mapData
+                                }
+                            ]
+                        };
+                        mapChart.setOption(option);
+                        previousData = data;
+                    }
+                })
+              .catch(error => console.error('数据更新出错:', error));
+        }
+    </script>
+</body>
+
+</html>

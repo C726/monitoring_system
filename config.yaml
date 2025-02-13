@@ -1,0 +1,16 @@
+TradeIDs:
+  - 487035
+watchTradeID:
+  - 501826
+downloadTestCount: 3
+downloadURL: "http://180.112.242.197:8000/10m.bin"
+webServerPort: 51000
+#【外部tcp_MOD】
+connect_out: "true"
+connect_base_url: "http://8.140.224.200:50000"
+baseAPIAddr: "http://8.140.224.200:18080"
+#【tcp_MOD】
+tcpport: "50000"
+tcp_half_connection_timeout: 10s  # 可根据需要调整半连接超时时间
+#【Checker】
+checkerr_test_num: 3
