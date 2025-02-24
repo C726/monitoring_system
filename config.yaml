@@ -13,4 +13,10 @@ baseAPIAddr: "http://8.140.224.200:18080"
 tcpport: "50000"
 tcp_half_connection_timeout: 10s  # 可根据需要调整半连接超时时间
 #【Checker】
-checkerr_test_num: 3
+checker:
+  bad_line_min_speed: 3 # 检查失败的城市ID时，平均下载速率不得低于该值，单位MB
+  good_line_min_speed: 10 # 检查呈贡的城市ID时，平均下载速率不得低于该值，单位MB MB
+check_err_test_num: 3
+#【数据库配置】
+database:
+  db_type: "sqlite"

@@ -3,12 +3,35 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"log"
 	"monitoring_system/http_requests"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// InitDatabase 初始化数据库
+func InitDatabase() *sql.DB {
+	db, err := OpenDatabase()
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"Error": err,
+		}).Fatal("打开数据库出错")
+	}
+	// 设置最大打开连接数
+	db.SetMaxOpenConns(10)
+	// 设置最大空闲连接数
+	db.SetMaxIdleConns(5)
+
+	// 创建表
+	if err = CreateTables(db); err != nil {
+		logrus.WithFields(logrus.Fields{
+			"Error": err,
+		}).Fatal("创建表出错")
+	}
+	return db
+}
 
 // OpenDatabase 打开 SQLite 数据库
 func OpenDatabase() (*sql.DB, error) {

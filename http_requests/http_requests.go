@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -44,16 +45,27 @@ type NodeResponse struct {
 
 // Config 配置文件结构体
 type Config struct {
-	TradeIDs          []int  `yaml:"TradeIDs"`
-	DownloadTestCount int    `yaml:"downloadTestCount"`
-	DownloadURL       string `yaml:"downloadURL"`
-	TargetAddr        string `yaml:"targetAddr"`
-	WebServerPort     int    `yaml:"webServerPort"`
-	WatchTradeID      []int  `yaml:"watchTradeID"`      // 添加 WatchTradeID 字段
-	BaseAPIAddr       string `yaml:"baseAPIAddr"`       // 新增基础 API 地址字段
-	Errtestnum        int    `yaml:"checkerr_test_num"` // 新增 checkerr_test_num 字段
-	ConnectBaseURL    string `yaml:"connect_base_url"`  // 新增 connect_base_url 字段
-	ConnectOut        string `yaml:"connect_out"`       // 新增 connect_out 字段
+	TradeIDs          []int       `yaml:"TradeIDs"`
+	DownloadTestCount int         `yaml:"downloadTestCount"`
+	DownloadURL       string      `yaml:"downloadURL"`
+	TargetAddr        string      `yaml:"targetAddr"`
+	WebServerPort     int         `yaml:"webServerPort"`
+	WatchTradeID      []int       `yaml:"watchTradeID"`       // 添加 WatchTradeID 字段
+	BaseAPIAddr       string      `yaml:"baseAPIAddr"`        // 新增基础 API 地址字段
+	ErrTestNum        int         `yaml:"check_err_test_num"` // 新增 check_err_test_num 字段
+	ConnectBaseURL    string      `yaml:"connect_base_url"`   // 新增 connect_base_url 字段
+	ConnectOut        string      `yaml:"connect_out"`        // 新增 connect_out 字段
+	DatabaseCFG       DatabaseCFG `yaml:"database"`
+	Checker           Checker     `yaml:"checker"`
+}
+
+type Checker struct {
+	BadLineMinSpeed  float64 `yaml:"bad_line_min_speed"`
+	GoodLineMinSpeed float64 `yaml:"good_line_min_speed"`
+}
+
+type DatabaseCFG struct {
+	DBType string `yaml:"db_type"`
 }
 
 // ChangeNodeResponse 变更节点请求的响应结构体
@@ -233,7 +245,15 @@ func GetLines(config *Config) ([]Line, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			logrus.WithFields(logrus.Fields{
+				"package": "http_requests",
+				"error":   err,
+			}).Error("http连接关闭失败")
+		}
+	}(resp.Body)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -253,7 +273,7 @@ func GetLines(config *Config) ([]Line, error) {
 
 // ReadConfig 读取配置文件
 func ReadConfig() (*Config, error) {
-	file, err := ioutil.ReadFile("config.yaml")
+	file, err := os.ReadFile("config.yaml")
 	if err != nil {
 		log.Fatalf("读取配置文件出错: %v", err)
 		return nil, err

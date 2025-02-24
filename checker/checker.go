@@ -3,9 +3,11 @@ package checker
 import (
 	"bufio"
 	"database/sql"
+	"errors"
 	"fmt"
 	"monitoring_system/database"
 	"monitoring_system/http_requests"
+	"monitoring_system/modules"
 	"os"
 	"os/exec"
 	"strconv"
@@ -38,22 +40,17 @@ type Checker struct {
 	ScannedMutex            sync.Mutex        // 保护 ScannedIDs 的互斥锁
 	GoodLineCheckedIDs      map[int]time.Time // 存储已检查的 good_line id 及其过期时间
 	GoodLineCheckedIDsMutex sync.Mutex        // 保护 GoodLineCheckedIDs 的互斥锁
-}
-
-// 记录日志并返回错误
-func logAndReturnError(log *logrus.Entry, errMsg string, err error) error {
-	log.Error(errMsg)
-	return fmt.Errorf("%s: %w", errMsg, err)
+	IsFromGoodLine          bool
 }
 
 // TestSOCKS5 执行 SOCKS5 测试
-func TestSOCKS5(user, pass, endpointAddr, TargetAddr, nodeName, outboundIP string, testCount int) (float64, int64, error) {
+func TestSOCKS5(line *http_requests.Line, TargetAddr string, testCount int) (float64, int64, error) {
 	totalTime := int64(0)
 	successCount := 0
 
 	for i := 0; i < testCount; i++ {
 		start := time.Now()
-		dialer, err := proxy.SOCKS5("tcp", endpointAddr, &proxy.Auth{User: user, Password: pass}, proxy.Direct)
+		dialer, err := proxy.SOCKS5("tcp", line.EndpointAddr, &proxy.Auth{User: line.SSUser, Password: line.SSPass}, proxy.Direct)
 		if err != nil {
 			continue
 		}
@@ -70,10 +67,10 @@ func TestSOCKS5(user, pass, endpointAddr, TargetAddr, nodeName, outboundIP strin
 	}
 
 	if successCount == 0 {
-		errMsg := fmt.Sprintf("所有测试请求均失败，连接信息: %s，账号: %s，密码: %s", endpointAddr, user, pass)
+		errMsg := fmt.Sprintf("所有测试请求均失败，连接信息: %s，账号: %s，密码: %s", line.EndpointAddr, line.SSUser, line.SSPass)
 		logrus.WithFields(logrus.Fields{
-			"user":         user,
-			"endpointAddr": endpointAddr,
+			"user":         line.SSUser,
+			"endpointAddr": line.EndpointAddr,
 			"targetAddr":   TargetAddr,
 		}).Error(errMsg)
 		return 0, 0, fmt.Errorf(errMsg)
@@ -138,6 +135,23 @@ func retryOperation(operation func() error, maxRetries int, sleepDuration time.D
 	}
 }
 
+// MapChecker 检查ExitErrorMap中的CityID
+func (c *Checker) MapChecker() {
+	logrus.Error("【Checker】发现异常开始执行检测流程...")
+	for randomCityID := range c.ExitErrorMap {
+		if randomCityID == 0 {
+			logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】获取的 randomCityID 为 0，跳过此次检测")
+			delete(c.ExitErrorMap, randomCityID)
+			continue
+		}
+		logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】从 ExitErrorMap 中移除节点 ID：", randomCityID)
+		delete(c.ExitErrorMap, randomCityID)
+		logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】开始处理节点 ID：", randomCityID)
+		c.processRandomCityID(randomCityID)
+		break
+	}
+}
+
 // Check 执行检测逻辑
 func (c *Checker) Check() {
 	c.ExitErrorMutex.Lock()
@@ -145,113 +159,105 @@ func (c *Checker) Check() {
 		c.ExitErrorMutex.Unlock()
 		// logrus.Warn("【Checker】已释放互斥锁")
 	}()
-	consecutiveFailures := 0
-	if len(c.ExitErrorMap) == 0 {
-		logrus.Warning("【Checker】检测ExitErrorMap为空")
-		logrus.Warning("【Checker】已分配watchTradeID：", c.Config.WatchTradeID)
-		for {
-			var randomCityID int
-			// 查询bad_line表
-			err := c.DB.QueryRow("SELECT randomCityID FROM bad_line ORDER BY RANDOM() LIMIT 1").Scan(&randomCityID)
-			if err != nil {
-				if err == sql.ErrNoRows {
-					logrus.Warn("【Checker】数据库中bad_line表没有扫描到需要检测的节点")
-					consecutiveFailures++
-					if consecutiveFailures >= 3 {
-						// 尝试从good_line表获取数据
-						var goodLineRandomCityID int
-						err := c.DB.QueryRow("SELECT node_id FROM good_line ORDER BY RANDOM() LIMIT 1").Scan(&goodLineRandomCityID)
-						if err != nil {
-							if err == sql.ErrNoRows {
-								logrus.Warn("【Checker】数据库中good_line表也没有扫描到需要检测的节点")
-								logrus.Warn("【Checker】 等待 10 分钟后重新查询是否有新的记录")
-								for i := 0; i < 10; i++ {
-									time.Sleep(1 * time.Minute)
-									logrus.Warn("【Checker】等待", 10-i, "分钟后重新查询是否有新的记录")
-								}
-								consecutiveFailures = 0
-								break
-							} else {
-								logAndReturnError(logrus.WithFields(logrus.Fields{"Error": err}), "【Checker】查询 good_line 表时出错", err)
-								break
-							}
-						}
-						c.GoodLineCheckedIDsMutex.Lock()
-						if expiration, exists := c.GoodLineCheckedIDs[goodLineRandomCityID]; exists && time.Since(expiration) < 30*time.Minute {
-							c.GoodLineCheckedIDsMutex.Unlock()
-							logrus.WithFields(logrus.Fields{"randomCityID": goodLineRandomCityID}).Warn("【Checker】good_line 中的节点 ID 已检查过，跳过检测")
-							continue
-						}
-						c.GoodLineCheckedIDs[goodLineRandomCityID] = time.Now().Add(30 * time.Minute)
-						c.GoodLineCheckedIDsMutex.Unlock()
-						randomCityID = goodLineRandomCityID
-					} else {
-						continue
-					}
-				} else {
-					logAndReturnError(logrus.WithFields(logrus.Fields{"Error": err}), "【Checker】查询 bad_line 表时出错", err)
-					break
+	// ExitErrorMap 存在数据则直接进行检测
+	if len(c.ExitErrorMap) > 0 {
+		c.MapChecker()
+		return
+	}
+
+	consecutiveFailures := 3 // bad_line 允许查询无数据的次数，方便之后修改
+	logrus.Warning("【Checker】检测ExitErrorMap为空")
+	logrus.Warning("【Checker】已分配watchTradeID：", c.Config.WatchTradeID)
+	// 至少进行一次检测，可能查询出已经检测过的ID
+	for {
+		var randomCityID int
+		var err error
+		var badLine modules.BadLine
+		c.IsFromGoodLine = false // 确保每次遍历都从false开始
+		randomCityID, err = badLine.GetRandomCityID(c.DB)
+		// 查询bad_line表
+		if randomCityID == 0 {
+			if errors.Is(err, sql.ErrNoRows) {
+				logrus.Warn("【Checker】数据库中bad_line表没有扫描到需要检测的节点")
+				consecutiveFailures--
+				if consecutiveFailures > 0 {
+					// bad_line 表查询无数据次数未达到允许失败次数
+					continue
 				}
+				// 尝试从good_line表获取数据
+				var goodLineRandomCityID int
+				var goodLine modules.GoodLine
+				goodLineRandomCityID, err = goodLine.GetRandomCityID(c.DB)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						logrus.Warn("【Checker】数据库中good_line表也没有扫描到需要检测的节点")
+						logrus.Warn("【Checker】 等待 10 分钟后重新查询是否有新的记录")
+						for i := 0; i < 10; i++ {
+							time.Sleep(1 * time.Minute)
+							logrus.Warn("【Checker】等待", 10-i, "分钟后重新查询是否有新的记录")
+						}
+						consecutiveFailures = 3 // 重置允许次数
+						break
+					} else {
+						logrus.WithFields(logrus.Fields{"Error": err}).Error("【Checker】查询 good_line 表时出错")
+						break
+					}
+				}
+				c.GoodLineCheckedIDsMutex.Lock()
+				if expiration, exists := c.GoodLineCheckedIDs[goodLineRandomCityID]; exists && time.Since(expiration) < 30*time.Minute {
+					c.GoodLineCheckedIDsMutex.Unlock()
+					logrus.WithFields(logrus.Fields{"randomCityID": goodLineRandomCityID}).Warn("【Checker】good_line 中的节点 ID 已检查过，跳过检测")
+					continue
+				}
+				c.GoodLineCheckedIDs[goodLineRandomCityID] = time.Now().Add(30 * time.Minute)
+				c.GoodLineCheckedIDsMutex.Unlock()
+				c.IsFromGoodLine = true
+				randomCityID = goodLineRandomCityID
+			} else {
+				logrus.WithFields(logrus.Fields{"Error": err}).Error("【Checker】查询 bad_line 表时出错")
+				break
 			}
-			// consecutiveFailures = 0
-			if randomCityID == 0 {
-				// logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】获取的 randomCityID 为 0，跳过此次检测")
-				continue
-			}
-			c.ScannedMutex.Lock()
-			if expiration, exists := c.ScannedIDs[randomCityID]; exists && time.Since(expiration) < 30*time.Minute {
-				c.ScannedMutex.Unlock()
-				logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】检测记录已存在,15秒后继续找下一个")
-				time.Sleep(15 * time.Second)
-				continue
-			}
-			c.ScannedIDs[randomCityID] = time.Now().Add(30 * time.Minute)
+		}
+		c.ScannedMutex.Lock()
+		if expiration, exists := c.ScannedIDs[randomCityID]; exists && time.Since(expiration) < 30*time.Minute {
 			c.ScannedMutex.Unlock()
-			logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】从表中获取到节点 ID：", randomCityID)
-			c.processRandomCityID(randomCityID)
-			break
+			logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】检测记录已存在,15秒后继续找下一个")
+			time.Sleep(15 * time.Second)
+			continue
 		}
-	} else {
-		logrus.Error("【Checker】发现异常开始执行检测流程...")
-		for randomCityID := range c.ExitErrorMap {
-			if randomCityID == 0 {
-				logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】获取的 randomCityID 为 0，跳过此次检测")
-				delete(c.ExitErrorMap, randomCityID)
-				continue
-			}
-			logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】从 ExitErrorMap 中移除节点 ID：", randomCityID)
-			delete(c.ExitErrorMap, randomCityID)
-			logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】开始处理节点 ID：", randomCityID)
-			c.processRandomCityID(randomCityID)
-			break
-		}
+		c.ScannedIDs[randomCityID] = time.Now().Add(30 * time.Minute)
+		c.ScannedMutex.Unlock()
+		logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】从表中获取到节点 ID：", randomCityID)
+		c.processRandomCityID(randomCityID)
+		break
 	}
 }
 
 // processRandomCityID 处理单个 randomCityID 的检测流程
 func (c *Checker) processRandomCityID(randomCityID int) {
 	// 判断是否从 good_line 表获取的 randomCityID
-	isFromGoodLine := false
-	var dummy int
-	err := c.DB.QueryRow("SELECT 1 FROM good_line WHERE node_id =?", randomCityID).Scan(&dummy)
-	if err == nil {
-		isFromGoodLine = true
-	}
+	isFromGoodLine := c.IsFromGoodLine
+
+	var err error
 
 	if randomCityID == 0 {
-		logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】传入的 randomCityID 为 0，不执行检测流程并标记为已检测")
+		logrus.WithFields(logrus.Fields{"randomCityID": randomCityID}).Warn("【Checker】传入的 randomCityID 为 0，不执行检测流程")
 		c.ScannedMutex.Lock()
 		c.ScannedIDs[randomCityID] = time.Now().Add(30 * time.Minute)
 		c.ScannedMutex.Unlock()
 		return
 	}
 	watchTradeID := c.Config.WatchTradeID[0]
-	logrus.WithFields(logrus.Fields{"randomCityID": randomCityID, "watchTradeID": watchTradeID}).Warnf("【Checker】开始处理节点 ID：%d，WorKer：%d", randomCityID, watchTradeID)
+	logrus.WithFields(logrus.Fields{"randomCityID": randomCityID, "watchTradeID": watchTradeID}).
+		Warnf("【Checker】开始处理节点 ID：%d，WorKer：%d", randomCityID, watchTradeID)
 
 	// 更换节点到指定城市
-	err = retryOperation(func() error {
-		return http_requests.ChangeNode(c.Config, randomCityID, watchTradeID)
-	}, 3, 1*time.Second, logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID}), watchTradeID, randomCityID, "更换节点到指定城市")
+	err = retryOperation(
+		func() error {
+			return http_requests.ChangeNode(c.Config, randomCityID, watchTradeID)
+		}, 3, 1*time.Second,
+		logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID}),
+		watchTradeID, randomCityID, "更换节点到指定城市")
 	if err != nil {
 		logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID, "Error": err}).Error("【Checker】更换节点到指定城市失败")
 		return
@@ -259,13 +265,20 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 
 	// 获取节点信息
 	var lines []http_requests.Line
-	err = retryOperation(func() error {
-		var err error
-		lines, err = http_requests.GetLines(c.Config)
-		return err
-	}, 3, 1*time.Second, logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID}), watchTradeID, randomCityID, "获取线路信息")
+	err = retryOperation(
+		func() error {
+			lines, err = http_requests.GetLines(c.Config)
+			return err
+		}, 3, 1*time.Second,
+		logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID}),
+		watchTradeID, randomCityID, "获取线路信息")
 	if err != nil {
 		logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID, "Error": err}).Error("【Checker】获取线路信息失败")
+		return
+	}
+
+	if len(lines) == 0 {
+		logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID, "Error": err}).Error("【Checker】获取线路信息为空")
 		return
 	}
 
@@ -274,6 +287,11 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 		if line.SSUser == strconv.Itoa(watchTradeID) {
 			matchedLines = append(matchedLines, line)
 		}
+	}
+
+	if len(matchedLines) == 0 {
+		logrus.WithFields(logrus.Fields{"TradeID": watchTradeID, "RandomCityID": randomCityID, "Error": err}).Error("【Checker】无匹配的线路")
+		return
 	}
 
 	totalDownloadSpeed := 0.0
@@ -294,8 +312,8 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 		targetAddr := strings.TrimPrefix(c.Config.ConnectBaseURL, "http://")
 		logrus.SetLevel(logrus.InfoLevel)
 
-		for i := 0; i < c.Config.Errtestnum; i++ {
-			successRate, avgResponseTime, err := TestSOCKS5(line.SSUser, line.SSPass, line.EndpointAddr, targetAddr, line.NodeName, line.OutboundIP, 1)
+		for i := 0; i < c.Config.ErrTestNum; i++ {
+			successRate, avgResponseTime, err := TestSOCKS5(&line, targetAddr, 1)
 			if err != nil {
 				logrus.WithFields(logrus.Fields{
 					"TradeID":      watchTradeID,
@@ -316,6 +334,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 				}).Warning("【Checker】节点 SOCKS5 测试成功")
 			}
 
+			// 开始进行 curl 下载测试
 			downloadManager := &DownloadManager{
 				DB:             c.DB,
 				TradeID:        watchTradeID,
@@ -323,9 +342,10 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 				ExitErrorMap:   c.ExitErrorMap,
 				ExitErrorMutex: c.ExitErrorMutex,
 			}
-			speed, err := downloadManager.PerformDownloadTests(line, randomCityID)
+			speed, err := downloadManager.PerformDownloadTests(&line, randomCityID)
 			if err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
 					exitCode := exitErr.ExitCode()
 					if exitCode == 18 || exitCode == 28 || exitCode == 97 {
 						errorCount++
@@ -357,7 +377,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 				}
 				errorCount++
 
-				if speed > 3 {
+				if speed < c.Config.Checker.BadLineMinSpeed {
 					logrus.WithFields(logrus.Fields{
 						"TradeID":      watchTradeID,
 						"RandomCityID": randomCityID,
@@ -372,7 +392,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 						"Error":        err,
 					}).Error("【Checker】下载测试失败,开始更换节点 IP")
 				}
-				err := http_requests.ChangeLineIP(c.Config, watchTradeID)
+				err = http_requests.ChangeLineIP(c.Config, watchTradeID)
 				time.Sleep(5 * time.Second)
 				if err != nil {
 					logrus.WithFields(logrus.Fields{
@@ -389,7 +409,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 
 			} else {
 				// 根据来源判断是否更换 IP
-				if isFromGoodLine && speed < 10 {
+				if isFromGoodLine && speed < c.Config.Checker.GoodLineMinSpeed {
 					err := http_requests.ChangeLineIP(c.Config, watchTradeID)
 					time.Sleep(5 * time.Second)
 					if err != nil {
@@ -404,7 +424,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 							"RandomCityID": randomCityID,
 						}).Warning("【Checker】更换节点 IP 成功（good_line 单次速率小于10）")
 					}
-				} else if !isFromGoodLine && speed < 3 {
+				} else if !isFromGoodLine && speed < c.Config.Checker.BadLineMinSpeed {
 					err := http_requests.ChangeLineIP(c.Config, watchTradeID)
 					time.Sleep(5 * time.Second)
 					if err != nil {
@@ -422,7 +442,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 				}
 			}
 
-			if isFromGoodLine && speed >= 10 {
+			if isFromGoodLine && speed >= c.Config.Checker.GoodLineMinSpeed {
 				allBelow10Mbps = false
 			}
 
@@ -450,30 +470,18 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 				"TradeID":      watchTradeID,
 				"RandomCityID": randomCityID,
 				"Error":        err,
-			}).Error("【Checker】格式化平均下载速率时出错")
-			formattedSpeed = 0 // 出错时使用默认值 0
+			}).Warn("【Checker】格式化平均下载速率时出错")
 		}
 
 		// 如果 randomCityID 来自 good_line 且所有下载测试速率都小于 10Mbps，则从 good_line 中删除
 		if isFromGoodLine && allBelow10Mbps {
-			_, err := c.DB.Exec("DELETE FROM good_line WHERE node_id =?", randomCityID)
-			if err != nil {
-				logrus.WithFields(logrus.Fields{
-					"TradeID":      watchTradeID,
-					"RandomCityID": randomCityID,
-					"Error":        err,
-				}).Error("【Checker】从 good_line 表中删除记录时出错")
-			} else {
-				logrus.WithFields(logrus.Fields{
-					"TradeID":      watchTradeID,
-					"RandomCityID": randomCityID,
-				}).Warn("【Checker】从 good_line 表中删除记录成功，所有下载速率均小于 10Mbps")
-			}
+			var goodLine modules.GoodLine
+			goodLine.CheckIsNotExistsAndInsert(c.DB, randomCityID)
 		}
 
 		// 如果 randomCityID 不是来自 good_line，则执行原有的 bad_line 处理逻辑
 		if !isFromGoodLine {
-			if errorCount <= 2 || formattedSpeed < 3 {
+			if errorCount <= 2 || formattedSpeed < c.Config.Checker.BadLineMinSpeed {
 				// 记录要从 bad_line 表中删除记录的日志
 				logrus.WithFields(logrus.Fields{
 					"TradeID":      watchTradeID,
@@ -598,14 +606,14 @@ func (dm *DownloadManager) GetDownloadURL() (string, error) {
 }
 
 // PerformDownloadTests 进行多次下载测试以计算平均下载速率
-func (dm *DownloadManager) PerformDownloadTests(line http_requests.Line, randomCityID int) (float64, error) {
+func (dm *DownloadManager) PerformDownloadTests(line *http_requests.Line, randomCityID int) (float64, error) {
 	downloadURL, err := dm.GetDownloadURL()
 	if err != nil {
 		return 0, err
 	}
 
 	proxyURL := fmt.Sprintf("socks5://%s:%s@%s", line.SSUser, line.SSPass, line.EndpointAddr)
-	downloadTestCount := dm.Config.Errtestnum
+	downloadTestCount := dm.Config.ErrTestNum
 	var totalSpeed float64
 
 	for i := 0; i < downloadTestCount; i++ {

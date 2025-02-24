@@ -255,7 +255,7 @@ func (c *Checker) processRandomCityID(randomCityID int) {
 		logrus.SetLevel(logrus.InfoLevel)
 		badOutboundIPs := make(map[string]struct{}) // 用于存储出现 exit 18、28、97 错误的 outboundIP
 
-		for i := 0; i < c.Config.Errtestnum; i++ {
+		for i := 0; i < c.Config.ErrTestNum; i++ {
 			successRate, avgResponseTime, err := TestSOCKS5(line.SSUser, line.SSPass, line.EndpointAddr, targetAddr, line.NodeName, line.OutboundIP, 1)
 			if err != nil {
 				logrus.WithFields(logrus.Fields{
@@ -517,7 +517,7 @@ func (dm *DownloadManager) PerformDownloadTests(line http_requests.Line, randomC
 	}
 
 	proxyURL := fmt.Sprintf("socks5://%s:%s@%s", line.SSUser, line.SSPass, line.EndpointAddr)
-	downloadTestCount := dm.Config.Errtestnum
+	downloadTestCount := dm.Config.ErrTestNum
 	var totalSpeed float64
 
 	for i := 0; i < downloadTestCount; i++ {
